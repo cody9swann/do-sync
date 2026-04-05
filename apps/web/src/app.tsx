@@ -20,9 +20,15 @@ const WORKSPACE_ICONS = [
 
 const CHANNELS = ["general", "random", "watercooler", "new-biz"]
 
+const DM_AVATAR_CODY =
+  "https://media.licdn.com/dms/image/v2/C4D03AQHpCAhTweDQIw/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1617472337831?e=1776902400&v=beta&t=-ABSMEHjHtNDEIGG4bx-Y3tzF9TF3XSP8WIYg5UfXxc"
+
+const DM_AVATAR_GABBY =
+  "https://media.licdn.com/dms/image/v2/C4D03AQHHb1I73h8eJg/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1636650896688?e=1776902400&v=beta&t=pVFiiR1w823T44S1pT3sQrQY0BhYSkVN150Kie2PO4o"
+
 const DM_USERS = [
-  { name: "Cody", avatar: "🧑‍🦰" },
-  { name: "Gabby", avatar: "🧑‍🦰" },
+  { name: "Cody", avatarUrl: DM_AVATAR_CODY },
+  { name: "Gabby", avatarUrl: DM_AVATAR_GABBY },
 ]
 
 // ---------- color helpers ----------
@@ -60,7 +66,7 @@ export default function App() {
   }
 
   if (!db) {
-    return <div style={styles.loadingFull}>Loading channel...</div>
+    return <div style={styles.loadingFull}></div>
   }
 
   return (
@@ -105,7 +111,7 @@ function WorkspaceStrip() {
       </div>
       {/* user avatar pinned to bottom */}
       <div style={styles.sidebarFooter}>
-        <div style={{ ...styles.userAvatar, backgroundImage: "url(https://github.com/codyswann.png)" }}>{initials(AUTHOR_ID)}</div>
+        <div style={{ ...styles.userAvatar, backgroundImage: "url(https://avatars.githubusercontent.com/codyswann?v=4)" }}>{initials(AUTHOR_ID)}</div>
       </div>
     </div>
   )
@@ -128,11 +134,11 @@ function Sidebar({ activeChannel }: { activeChannel: string }) {
       {CHANNELS.map((ch) => (
         <div
           key={ch}
-          style={{
-            ...styles.channelItem,
-            backgroundColor: ch === activeChannel ? "#171717" : "transparent",
-            color: ch === activeChannel ? "#fff" : "#999",
-          }}
+          className={
+            "sidebar-nav-item sidebar-nav-item--channel" +
+            (ch === activeChannel ? " sidebar-nav-item--active" : "")
+          }
+          style={styles.channelItem}
         >
 
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -143,19 +149,17 @@ function Sidebar({ activeChannel }: { activeChannel: string }) {
           {ch}
         </div>
       ))}
-      <div style={styles.addChannel}>
-        <span style={{ marginRight: 6 }}>
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M3.33334 8H12.6667M8 3.33333V12.6667" stroke="#5C5C5C" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-
-        </span> Add channel
+      <div className="sidebar-nav-item sidebar-nav-item--channel" style={styles.channelItem}>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M3.33334 8H12.6667M8 3.33333V12.6667" stroke="#5C5C5C" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        Add channel
       </div>
 
       <div style={{ ...styles.sectionLabel, marginTop: 20 }}>Direct Messages</div>
       {DM_USERS.map((u, i) => (
-        <div key={i} style={styles.dmItem}>
-          <span style={styles.dmAvatar}>{u.avatar}</span>
+        <div key={i} className="sidebar-nav-item sidebar-nav-item--muted" style={styles.dmItem}>
+          <img src={u.avatarUrl} alt="" style={styles.dmAvatarImg} width={20} height={20} />
           {u.name}
         </div>
       ))}
@@ -168,11 +172,37 @@ function Sidebar({ activeChannel }: { activeChannel: string }) {
 
 function MainPanel({ db }: { db: MessagesDb }) {
   const typingUsers = useTypingUsers(db.channelSync)
+  const demoOffline = useSyncExternalStore(
+    db.subscribeDemoOffline,
+    db.isDemoOffline,
+    () => false
+  )
 
   return (
     <div style={styles.main}>
       <div style={styles.mainHeader}>
         <span style={styles.mainHeaderTitle}>{CHANNEL_ID}</span>
+        <div style={styles.headerActions}>
+          <button
+            style={{
+              ...styles.headerActionBtn,
+              ...(demoOffline ? styles.headerActionBtnActive : null),
+            }}
+            onClick={() => {
+              db.setDemoOffline(!demoOffline)
+            }}
+          >
+            {demoOffline ? "Offline" : "Online"}
+          </button>
+          <button
+            style={styles.headerActionBtn}
+            onClick={() => {
+              void db.resetLocalCache()
+            }}
+          >
+            Clear local cache
+          </button>
+        </div>
       </div>
       <MessageList
         collection={db.collection}
@@ -213,7 +243,7 @@ function MessageList({
 
   return (
     <div style={styles.messageList}>
-      {isLoading && <div style={styles.emptyState}>Loading channel...</div>}
+      {/* {isLoading && <div style={styles.emptyState}>Loading channel...</div>} */}
       {!isLoading && orderedMessages.length === 0 && (
         <div style={styles.emptyState}>No messages yet. Say something!</div>
       )}
@@ -402,12 +432,28 @@ function MessageInput({
         <div style={styles.inputToolbar}>
           <button style={styles.plusBtn}>+</button>
           <button
-            style={styles.sendArrow}
+            style={{
+              ...styles.sendArrow,
+              opacity: body.trim() ? 1 : 0.35,
+            }}
             onClick={() => void handleSend()}
             disabled={!body.trim()}
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" fill="currentColor" />
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <g clipPath="url(#sendBtnClip)">
+                <path
+                  d="M9.09468 10.9044C8.93542 10.7454 8.74561 10.6203 8.53671 10.5367L1.92837 7.88669C1.84947 7.85503 1.78214 7.79999 1.73542 7.72897C1.6887 7.65794 1.66483 7.57431 1.66701 7.48933C1.66918 7.40434 1.69731 7.32205 1.7476 7.2535C1.7979 7.18496 1.86795 7.13344 1.94837 7.10586L17.7817 1.68919C17.8555 1.66252 17.9355 1.65743 18.0121 1.67452C18.0887 1.69161 18.1589 1.73016 18.2144 1.78567C18.2699 1.84119 18.3085 1.91136 18.3255 1.98799C18.3426 2.06461 18.3375 2.14452 18.3109 2.21836L12.8942 18.0517C12.8666 18.1321 12.8151 18.2022 12.7466 18.2525C12.678 18.3028 12.5957 18.3309 12.5107 18.3331C12.4258 18.3352 12.3421 18.3114 12.2711 18.2646C12.2001 18.2179 12.145 18.1506 12.1134 18.0717L9.46337 11.4617C9.37936 11.2529 9.25394 11.0634 9.09468 10.9044ZM9.09468 10.9044L18.2117 1.78919"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </g>
+              <defs>
+                <clipPath id="sendBtnClip">
+                  <rect width="20" height="20" fill="white" />
+                </clipPath>
+              </defs>
             </svg>
           </button>
         </div>
@@ -550,20 +596,9 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 14,
     opacity: 0.6,
   },
-  addChannel: {
-    padding: "8px 12px",
-    fontSize: 14,
-    color: "#A1A1A1",
-    cursor: "pointer",
-    display: "flex",
-    gap: 6,
-    alignItems: "center",
-    margin: "0 12px",
-  },
   dmItem: {
     padding: "8px 12px",
     fontSize: 14,
-    color: "#999",
     cursor: "pointer",
     display: "flex",
     alignItems: "center",
@@ -571,8 +606,12 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "0 12px",
     borderRadius: 4,
   },
-  dmAvatar: {
-    fontSize: 20,
+  dmAvatarImg: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    objectFit: "cover" as const,
+    flexShrink: 0,
   },
   sidebarFooter: {
     marginTop: "auto",
@@ -606,6 +645,7 @@ const styles: Record<string, React.CSSProperties> = {
     height: "54px",
     display: "flex",
     alignItems: "center",
+    justifyContent: "space-between",
     padding: "12px 20px",
     borderBottom: "1px solid #222",
     fontSize: 16,
@@ -613,6 +653,26 @@ const styles: Record<string, React.CSSProperties> = {
   },
   mainHeaderTitle: {
     color: "#e0e0e0",
+  },
+  headerActions: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  },
+  headerActionBtn: {
+    backgroundColor: "transparent",
+    border: "1px solid #2f2f2f",
+    borderRadius: 6,
+    color: "#949ba4",
+    cursor: "pointer",
+    fontSize: 12,
+    fontWeight: 500,
+    padding: "6px 10px",
+  },
+  headerActionBtnActive: {
+    border: "1px solid #8b3a3a",
+    color: "#ffb0b0",
+    backgroundColor: "#2a1111",
   },
 
   // -- messages --
@@ -755,7 +815,7 @@ const styles: Record<string, React.CSSProperties> = {
     width: 28,
     height: 28,
     borderRadius: "50%",
-    backgroundColor: "#333",
+    backgroundColor: "transparent",
     border: "none",
     color: "#dbdee1",
     fontSize: 18,
@@ -766,15 +826,20 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1,
   },
   sendArrow: {
+    boxSizing: "border-box" as const,
     width: 32,
     height: 32,
-    borderRadius: "50%",
-    backgroundColor: "transparent",
+    minWidth: 32,
+    minHeight: 32,
+    padding: 0,
+    borderRadius: 6,
+    backgroundColor: "#fff",
     border: "none",
-    color: "#dbdee1",
+    color: "#111",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     cursor: "pointer",
+    flexShrink: 0,
   },
 }

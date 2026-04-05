@@ -467,11 +467,19 @@ export class ChannelDO extends DurableObject<Env> {
 
     if (listMatch && request.method === "POST") {
       const body = (await request.json()) as {
+        mutationId?: string
         id?: string
         workspaceId: string
         channelId: string
         authorId: string
         body: string
+      }
+
+      if (body.mutationId) {
+        const existing = this.findEventByMutationId(body.mutationId)
+        if (existing?.type === "message.created") {
+          return this.json({ message: existing.message })
+        }
       }
 
       const created = this.createCanonicalMessage(body)
@@ -481,10 +489,19 @@ export class ChannelDO extends DurableObject<Env> {
 
     const itemMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/messages\/([^/]+)$/)
     if (itemMatch && request.method === "PATCH") {
-      const body = (await request.json()) as { body: string }
+      const body = (await request.json()) as { body: string; mutationId?: string }
+
+      if (body.mutationId) {
+        const existing = this.findEventByMutationId(body.mutationId)
+        if (existing?.type === "message.updated") {
+          return this.json({ message: existing.message })
+        }
+      }
+
       const updated = this.updateCanonicalMessage({
         id: itemMatch[2],
         body: body.body,
+        mutationId: body.mutationId,
       })
 
       if (!updated) {
@@ -496,8 +513,24 @@ export class ChannelDO extends DurableObject<Env> {
     }
 
     if (itemMatch && request.method === "DELETE") {
+      let mutationId: string | undefined
+      try {
+        const body = (await request.json()) as { mutationId?: string }
+        mutationId = body.mutationId
+      } catch {
+        mutationId = undefined
+      }
+
+      if (mutationId) {
+        const existing = this.findEventByMutationId(mutationId)
+        if (existing?.type === "message.deleted") {
+          return this.json({ ok: true })
+        }
+      }
+
       const deleted = this.deleteCanonicalMessage({
         id: itemMatch[2],
+        mutationId,
       })
 
       if (!deleted) {

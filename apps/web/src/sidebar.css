@@ -1,0 +1,28 @@
+.sidebar-nav-item:hover {
+  background-color: #1a1a1a;
+}
+
+.sidebar-nav-item--channel {
+  color: #999;
+}
+
+.sidebar-nav-item--channel:not(.sidebar-nav-item--active):hover {
+  color: #e8e8e8;
+}
+
+.sidebar-nav-item--active {
+  background-color: #171717;
+  color: #fff;
+}
+
+.sidebar-nav-item--active:hover {
+  background-color: #222;
+}
+
+.sidebar-nav-item--muted {
+  color: #999;
+}
+
+.sidebar-nav-item--muted:hover {
+  color: #e8e8e8;
+}
