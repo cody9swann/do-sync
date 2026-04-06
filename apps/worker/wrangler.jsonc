@@ -12,6 +12,10 @@
       {
         "name": "CHANNEL_DO",
         "class_name": "ChannelDO"
+      },
+      {
+        "name": "CHANNEL_REGISTRY_DO",
+        "class_name": "ChannelRegistryDO"
       }
     ]
   },
@@ -22,6 +26,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["ChannelDO"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["ChannelRegistryDO"]
     }
   ]
 }

@@ -1,44 +1,35 @@
-import type {
-  Message,
-  ServerMessage,
-} from "../../../shared/protocol"
+import type { Message, ServerMessage } from "../../../shared/protocol"
+
+export interface ChannelSyncDriver {
+  replaceChannelSnapshot: (channelId: string, messages: Message[]) => void
+  applyServerUpsert: (message: Message) => void
+  applyServerDelete: (messageId: string) => void
+  markChannelReady: (channelId: string) => void
+}
 
 export interface ChannelSyncConfig {
   channelId: string
   wsUrl: string
   authorId: string
-  initialMessages?: Message[]
+  connectLive?: boolean
   loadSnapshot?: () => Promise<Message[]>
   mergeSnapshot?: (messages: Message[]) => Message[]
   hasPendingMutationForMessage?: (messageId: string) => boolean
   isDemoOffline?: () => boolean
   subscribeDemoOffline?: (listener: () => void) => () => void
+  driver: ChannelSyncDriver
 }
 
-const TYPING_REFRESH_MS = 2000
-const TYPING_STALE_MS = 3500
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type SyncApi = {
-  begin: (opts?: { immediate?: boolean }) => void
-  write: (...args: Array<any>) => void
-  commit: () => void
-  markReady: () => void
-  truncate: () => void
-}
+const TYPING_REFRESH_MS = 2_000
+const TYPING_STALE_MS = 3_500
 
 export class ChannelSync {
-  private config: ChannelSyncConfig
   private ws: WebSocket | null = null
-  private syncApi: SyncApi | null = null
-  private collection:
-    | {
-        has: (key: string) => boolean
-      }
-    | null = null
   private disposed = false
-  private isReady = false
-  private seededInitialMessages = false
+  private liveEnabled: boolean
+  private refreshInFlight: Promise<void> | null = null
+  private startupRefreshTimer: number | null = null
+  private cleanupDemoOffline: (() => void) | null = null
 
   public connected = false
   private connectionListeners = new Set<(connected: boolean) => void>()
@@ -48,9 +39,6 @@ export class ChannelSync {
   private typingExpirations = new Map<string, number>()
   private localTyping = false
   private lastTypingStartAt = 0
-  private refreshInFlight: Promise<void> | null = null
-  private startupRefreshTimer: number | null = null
-  private cleanupDemoOffline: (() => void) | null = null
   private readonly handleWindowFocus = () => {
     void this.refreshAuthoritativeSnapshot()
     this.connect()
@@ -66,8 +54,36 @@ export class ChannelSync {
     this.connect()
   }
 
-  constructor(config: ChannelSyncConfig) {
-    this.config = config
+  constructor(private config: ChannelSyncConfig) {
+    this.liveEnabled = config.connectLive ?? false
+    this.cleanupDemoOffline =
+      this.config.subscribeDemoOffline?.(() => {
+        if (this.config.isDemoOffline?.()) {
+          this.disconnect()
+          return
+        }
+
+        if (this.liveEnabled) {
+          this.connect()
+          void this.refreshAuthoritativeSnapshot()
+        }
+      }) ?? null
+
+    if (this.liveEnabled) {
+      this.registerWindowListeners()
+      this.connect()
+      this.scheduleStartupRefresh()
+    }
+  }
+
+  dispose() {
+    if (this.disposed) return
+    this.disposed = true
+    this.unregisterWindowListeners()
+    this.cleanupDemoOffline?.()
+    this.cleanupDemoOffline = null
+    this.clearTypingState()
+    this.disconnect()
   }
 
   onConnectionChange(fn: (connected: boolean) => void): () => void {
@@ -84,94 +100,68 @@ export class ChannelSync {
     return this.typingSnapshot
   }
 
-  getCollectionConfig() {
-    return {
-      id: `messages-${this.config.channelId}`,
-      getKey: (msg: Message) => msg.id,
-      sync: {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        sync: (params: any) => {
-          const { collection, begin, write, commit, markReady, truncate } = params
-          this.collection = collection
-          this.syncApi = { begin, write, commit, markReady, truncate } as SyncApi
-          collection.onFirstReady(() => {
-            void this.refreshAuthoritativeSnapshot()
-          })
-          this.cleanupDemoOffline = this.config.subscribeDemoOffline?.(() => {
-            if (this.config.isDemoOffline?.()) {
-              this.disconnect()
-              return
-            }
-            this.connect()
-            void this.refreshAuthoritativeSnapshot()
-          }) ?? null
-          window.addEventListener("focus", this.handleWindowFocus)
-          window.addEventListener("pageshow", this.handlePageShow)
-          document.addEventListener("visibilitychange", this.handleVisibilityChange)
-          this.seedInitialMessages()
-          this.connect()
-          this.scheduleStartupRefresh()
+  activateLive() {
+    if (this.disposed) return
+    if (this.liveEnabled) return
+    this.liveEnabled = true
+    this.registerWindowListeners()
+    this.connect()
+    void this.refreshAuthoritativeSnapshot()
+    this.scheduleStartupRefresh()
+  }
 
-          return () => {
-            this.disposed = true
-            window.removeEventListener("focus", this.handleWindowFocus)
-            window.removeEventListener("pageshow", this.handlePageShow)
-            document.removeEventListener("visibilitychange", this.handleVisibilityChange)
-            if (this.startupRefreshTimer != null) {
-              window.clearTimeout(this.startupRefreshTimer)
-              this.startupRefreshTimer = null
-            }
-            this.cleanupDemoOffline?.()
-            this.cleanupDemoOffline = null
-            this.disconnect()
-          }
-        },
-        rowUpdateMode: "full" as const,
-      },
+  prefetchSnapshot() {
+    if (this.disposed) return Promise.resolve()
+    return this.refreshAuthoritativeSnapshot()
+  }
+
+  deactivateLive() {
+    if (!this.liveEnabled) return
+    this.liveEnabled = false
+    this.localTyping = false
+    this.unregisterWindowListeners()
+    this.clearTypingState()
+    this.disconnect()
+  }
+
+  setTyping(active: boolean) {
+    if (!this.liveEnabled) return
+    if (this.config.isDemoOffline?.()) return
+
+    if (active) {
+      const now = Date.now()
+      if (!this.localTyping || now - this.lastTypingStartAt >= TYPING_REFRESH_MS) {
+        this.localTyping = true
+        this.lastTypingStartAt = now
+        this.sendClientMessage({
+          type: "typing.start",
+          channelId: this.config.channelId,
+          authorId: this.config.authorId,
+        })
+      }
+      return
     }
-  }
 
-  applyServerUpsert(message: Message) {
-    if (!this.syncApi) return
-
-    const { begin, write, commit } = this.syncApi
-    begin({ immediate: true })
-    write({
-      type: this.collection?.has(message.id) ? "update" : "insert",
-      value: message,
+    if (!this.localTyping) return
+    this.localTyping = false
+    this.sendClientMessage({
+      type: "typing.stop",
+      channelId: this.config.channelId,
+      authorId: this.config.authorId,
     })
-    commit()
-  }
-
-  applyServerDelete(messageId: string) {
-    if (!this.syncApi) return
-
-    const { begin, write, commit } = this.syncApi
-    begin({ immediate: true })
-    write({ type: "delete", key: messageId })
-    commit()
   }
 
   private applySnapshot(messages: Message[]) {
-    if (!this.syncApi) return
-
     const nextMessages = this.config.mergeSnapshot
       ? this.config.mergeSnapshot(messages)
       : messages
-    const { begin, write, commit, truncate } = this.syncApi
-
-    begin()
-    truncate()
-    for (const row of nextMessages) {
-      write({ type: "insert", value: row })
-    }
-    commit()
+    this.config.driver.replaceChannelSnapshot(this.config.channelId, nextMessages)
+    this.config.driver.markChannelReady(this.config.channelId)
   }
 
   private async refreshAuthoritativeSnapshot() {
-    if (!this.config.loadSnapshot || this.refreshInFlight) {
-      return this.refreshInFlight ?? Promise.resolve()
-    }
+    if (!this.config.loadSnapshot) return
+    if (this.refreshInFlight) return this.refreshInFlight
 
     this.refreshInFlight = (async () => {
       try {
@@ -188,12 +178,11 @@ export class ChannelSync {
   }
 
   private scheduleStartupRefresh() {
+    if (!this.liveEnabled) return
     if (this.startupRefreshTimer != null) {
       window.clearTimeout(this.startupRefreshTimer)
     }
 
-    // Run one more authoritative refresh shortly after startup so persisted
-    // hydration cannot leave stale rows in place on a fresh app open.
     this.startupRefreshTimer = window.setTimeout(() => {
       this.startupRefreshTimer = null
       void this.refreshAuthoritativeSnapshot()
@@ -202,6 +191,7 @@ export class ChannelSync {
 
   private connect() {
     if (this.disposed) return
+    if (!this.liveEnabled) return
     if (this.config.isDemoOffline?.()) return
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return
@@ -228,34 +218,14 @@ export class ChannelSync {
     this.ws.onclose = () => {
       this.ws = null
       this.setConnected(false)
-      if (!this.disposed) {
-        window.setTimeout(() => this.connect(), 1000)
+      if (!this.disposed && this.liveEnabled) {
+        window.setTimeout(() => this.connect(), 1_000)
       }
     }
 
     this.ws.onerror = () => {
       this.setConnected(false)
     }
-  }
-
-  private seedInitialMessages() {
-    if (!this.syncApi || this.seededInitialMessages) return
-
-    const initialMessages = this.config.initialMessages ?? []
-    const { begin, write, commit, markReady } = this.syncApi
-
-    begin()
-    for (const message of initialMessages) {
-      write({ type: "insert", value: message })
-    }
-    commit()
-
-    if (!this.isReady) {
-      markReady()
-      this.isReady = true
-    }
-
-    this.seededInitialMessages = true
   }
 
   private disconnect() {
@@ -275,33 +245,8 @@ export class ChannelSync {
     for (const fn of this.connectionListeners) fn(value)
   }
 
-  setTyping(active: boolean) {
-    if (this.config.isDemoOffline?.()) return
-
-    if (active) {
-      const now = Date.now()
-      if (!this.localTyping || now - this.lastTypingStartAt >= TYPING_REFRESH_MS) {
-        this.localTyping = true
-        this.lastTypingStartAt = now
-        this.sendClientMessage({
-          type: "typing.start",
-          channelId: this.config.channelId,
-          authorId: this.config.authorId,
-        })
-      }
-      return
-    }
-
-    if (!this.localTyping) return
-    this.localTyping = false
-    this.sendClientMessage({
-      type: "typing.stop",
-      channelId: this.config.channelId,
-      authorId: this.config.authorId,
-    })
-  }
-
   private sendClientMessage(message: object) {
+    if (!this.liveEnabled) return
     if (this.config.isDemoOffline?.()) return
     if (this.ws?.readyState !== WebSocket.OPEN) return
     this.ws.send(JSON.stringify(message))
@@ -312,12 +257,22 @@ export class ChannelSync {
     for (const fn of this.typingListeners) fn()
   }
 
+  private clearTypingState() {
+    for (const timer of this.typingExpirations.values()) {
+      window.clearTimeout(timer)
+    }
+    this.typingExpirations.clear()
+    this.typingUsers.clear()
+    this.typingSnapshot = []
+    for (const fn of this.typingListeners) fn()
+  }
+
   private markUserTyping(authorId: string) {
     if (authorId === this.config.authorId) return
 
     const existingTimer = this.typingExpirations.get(authorId)
     if (existingTimer) {
-      clearTimeout(existingTimer)
+      window.clearTimeout(existingTimer)
     }
 
     this.typingUsers.add(authorId)
@@ -335,7 +290,7 @@ export class ChannelSync {
   private clearUserTyping(authorId: string) {
     const existingTimer = this.typingExpirations.get(authorId)
     if (existingTimer) {
-      clearTimeout(existingTimer)
+      window.clearTimeout(existingTimer)
       this.typingExpirations.delete(authorId)
     }
     if (this.typingUsers.delete(authorId)) {
@@ -343,10 +298,24 @@ export class ChannelSync {
     }
   }
 
-  private handleServerMessage(message: ServerMessage) {
-    if (!this.syncApi) return
-    const { begin, write, commit, markReady, truncate } = this.syncApi
+  private registerWindowListeners() {
+    if (!this.liveEnabled) return
+    window.addEventListener("focus", this.handleWindowFocus)
+    window.addEventListener("pageshow", this.handlePageShow)
+    document.addEventListener("visibilitychange", this.handleVisibilityChange)
+  }
 
+  private unregisterWindowListeners() {
+    window.removeEventListener("focus", this.handleWindowFocus)
+    window.removeEventListener("pageshow", this.handlePageShow)
+    document.removeEventListener("visibilitychange", this.handleVisibilityChange)
+    if (this.startupRefreshTimer != null) {
+      window.clearTimeout(this.startupRefreshTimer)
+      this.startupRefreshTimer = null
+    }
+  }
+
+  private handleServerMessage(message: ServerMessage) {
     switch (message.type) {
       case "snapshot": {
         this.applySnapshot(message.messages)
@@ -354,10 +323,7 @@ export class ChannelSync {
       }
 
       case "snapshot-end": {
-        if (!this.isReady) {
-          markReady()
-        }
-        this.isReady = true
+        this.config.driver.markChannelReady(this.config.channelId)
         break
       }
 
@@ -366,12 +332,7 @@ export class ChannelSync {
           break
         }
 
-        begin()
-        write({
-          type: this.collection?.has(message.message.id) ? "update" : "insert",
-          value: message.message,
-        })
-        commit()
+        this.config.driver.applyServerUpsert(message.message)
         break
       }
 
@@ -380,12 +341,7 @@ export class ChannelSync {
           break
         }
 
-        begin()
-        write({
-          type: this.collection?.has(message.message.id) ? "update" : "insert",
-          value: message.message,
-        })
-        commit()
+        this.config.driver.applyServerUpsert(message.message)
         break
       }
 
@@ -394,9 +350,7 @@ export class ChannelSync {
           break
         }
 
-        begin()
-        write({ type: "delete", key: message.id })
-        commit()
+        this.config.driver.applyServerDelete(message.id)
         break
       }
 

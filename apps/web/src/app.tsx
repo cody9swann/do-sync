@@ -1,11 +1,15 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react"
-import { useLiveQuery } from "@tanstack/react-db"
-import type { Collection } from "@tanstack/react-db"
-import type { NonSingleResult } from "@tanstack/react-db"
-import { initMessagesDb, AUTHOR_ID, CHANNEL_ID } from "./db/messages"
-import type { MessagesDb } from "./db/messages"
-import type { Message } from "../../shared/protocol"
-import type { ChannelSync } from "./realtime/channel-sync"
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react"
+import { eq, useLiveQuery } from "@tanstack/react-db"
+import type { Collection, NonSingleResult } from "@tanstack/react-db"
+import "./sidebar.css"
+import {
+  initChannelsDb,
+  initMessagesStore,
+  AUTHOR_ID,
+  DEFAULT_CHANNEL_ID,
+} from "./db/messages"
+import type { ChannelsDb, MessagesStore } from "./db/messages"
+import type { Channel, Message } from "../../shared/protocol"
 
 // ---------- static sidebar data (demo) ----------
 
@@ -18,8 +22,6 @@ const WORKSPACE_ICONS = [
   { letter: "T", color: "#223A26", border: "none" },
 ]
 
-const CHANNELS = ["general", "random", "watercooler", "new-biz"]
-
 const DM_AVATAR_CODY =
   "https://media.licdn.com/dms/image/v2/C4D03AQHpCAhTweDQIw/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1617472337831?e=1776902400&v=beta&t=-ABSMEHjHtNDEIGG4bx-Y3tzF9TF3XSP8WIYg5UfXxc"
 
@@ -30,6 +32,31 @@ const DM_USERS = [
   { name: "Cody", avatarUrl: DM_AVATAR_CODY },
   { name: "Gabby", avatarUrl: DM_AVATAR_GABBY },
 ]
+
+const AUTHOR_PROFILES: Record<string, { name: string; avatarUrl?: string }> = {
+  "user-maya": { name: "Maya", avatarUrl: "https://randomuser.me/api/portraits/women/44.jpg" },
+  "user-theo": { name: "Theo", avatarUrl: "https://randomuser.me/api/portraits/men/32.jpg" },
+  "user-priya": { name: "Priya", avatarUrl: "https://randomuser.me/api/portraits/women/68.jpg" },
+  "user-jordan": { name: "Jordan", avatarUrl: "https://randomuser.me/api/portraits/men/75.jpg" },
+  "user-alex": { name: "Alex", avatarUrl: "https://randomuser.me/api/portraits/women/33.jpg" },
+  "user-sam": { name: "Sam", avatarUrl: "https://randomuser.me/api/portraits/men/52.jpg" },
+}
+
+function sortChannels(channels: Channel[]) {
+  return [...channels].sort((left, right) => {
+    const createdDiff = left.createdAt.localeCompare(right.createdAt)
+    if (createdDiff !== 0) return createdDiff
+    return left.id.localeCompare(right.id)
+  })
+}
+
+function isEditableTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+
+  const tagName = target.tagName
+  return tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT"
+}
 
 // ---------- color helpers ----------
 
@@ -44,15 +71,80 @@ function initials(id: string) {
   return id.replace(/^user-/, "").slice(0, 2).toUpperCase()
 }
 
+function authorProfile(authorId: string) {
+  return AUTHOR_PROFILES[authorId] ?? null
+}
+
 // ---------- root ----------
 
-export default function App() {
-  const [db, setDb] = useState<MessagesDb | null>(null)
+export default function ChannelApp({
+  activeChannelId,
+  onNavigateChannel,
+}: {
+  activeChannelId: string
+  onNavigateChannel: (channelId: string) => void
+}) {
+  const [channelsDb, setChannelsDb] = useState<ChannelsDb | null>(null)
+  const [messagesStore, setMessagesStore] = useState<MessagesStore | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    initMessagesDb().then(setDb).catch((e) => setError(String(e)))
+    let cancelled = false
+
+    void initChannelsDb()
+      .then((nextChannelsDb) => {
+        if (cancelled) {
+          nextChannelsDb.dispose()
+          return
+        }
+        setChannelsDb(nextChannelsDb)
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e))
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    void initMessagesStore()
+      .then((nextStore) => {
+        if (cancelled) {
+          nextStore.dispose()
+          return
+        }
+        setMessagesStore(nextStore)
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setError(String(e))
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      messagesStore?.dispose()
+    }
+  }, [messagesStore])
+
+  useEffect(() => {
+    return () => {
+      channelsDb?.dispose()
+    }
+  }, [channelsDb])
+
+  useEffect(() => {
+    messagesStore?.activateChannel(activeChannelId)
+  }, [activeChannelId, messagesStore])
 
   if (error) {
     return (
@@ -65,15 +157,102 @@ export default function App() {
     )
   }
 
-  if (!db) {
+  if (!messagesStore || !channelsDb) {
     return <div style={styles.loadingFull}></div>
+  }
+
+  return (
+    <ChannelAppBody
+      channelsDb={channelsDb}
+      messagesStore={messagesStore}
+      activeChannelId={activeChannelId}
+      onNavigateChannel={onNavigateChannel}
+    />
+  )
+}
+
+function ChannelAppBody({
+  channelsDb,
+  messagesStore,
+  activeChannelId,
+  onNavigateChannel,
+}: {
+  channelsDb: ChannelsDb
+  messagesStore: MessagesStore
+  activeChannelId: string
+  onNavigateChannel: (channelId: string) => void
+}) {
+  const { data: channelRows = [] } = useLiveQuery(
+    channelsDb.collection as Collection<Channel, string> & NonSingleResult
+  )
+  const channels = sortChannels([...(channelRows ?? [])])
+
+  useEffect(() => {
+    if (channels.length === 0) return
+
+    const exists = channels.some((channel) => channel.id === activeChannelId)
+    const nextActiveChannelId = exists
+      ? activeChannelId
+      : channels[0]?.id ?? DEFAULT_CHANNEL_ID
+
+    if (nextActiveChannelId !== activeChannelId) {
+      onNavigateChannel(nextActiveChannelId)
+    }
+  }, [activeChannelId, channels, onNavigateChannel])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return
+      if (event.metaKey || event.ctrlKey || event.altKey) return
+      if (isEditableTarget(event.target)) return
+      if (channels.length === 0) return
+
+      const currentIndex = channels.findIndex((channel) => channel.id === activeChannelId)
+      const fallbackIndex = currentIndex === -1 ? 0 : currentIndex
+
+      if (event.key === "j") {
+        const nextIndex = Math.min(channels.length - 1, fallbackIndex + 1)
+        const nextChannel = channels[nextIndex]
+        if (nextChannel && nextChannel.id !== activeChannelId) {
+          event.preventDefault()
+          onNavigateChannel(nextChannel.id)
+        }
+        return
+      }
+
+      if (event.key === "k") {
+        const previousIndex = Math.max(0, fallbackIndex - 1)
+        const previousChannel = channels[previousIndex]
+        if (previousChannel && previousChannel.id !== activeChannelId) {
+          event.preventDefault()
+          onNavigateChannel(previousChannel.id)
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [activeChannelId, channels, onNavigateChannel])
+
+  const handleCreateChannel = async () => {
+    const name = window.prompt("New channel name")
+    if (!name?.trim()) return
+
+    const channel = await channelsDb.createChannel(name)
+    onNavigateChannel(channel.id)
   }
 
   return (
     <div style={styles.shell}>
       <WorkspaceStrip />
-      <Sidebar activeChannel={CHANNEL_ID} />
-      <MainPanel db={db} />
+      <Sidebar
+        channels={channels}
+        activeChannel={activeChannelId}
+        onSelectChannel={onNavigateChannel}
+        onPrefetchChannel={messagesStore.prefetchChannel}
+        onCreateChannel={() => void handleCreateChannel()}
+      />
+      <MainPanel messagesStore={messagesStore} activeChannelId={activeChannelId} />
     </div>
   )
 }
@@ -119,7 +298,19 @@ function WorkspaceStrip() {
 
 // ---------- sidebar ----------
 
-function Sidebar({ activeChannel }: { activeChannel: string }) {
+function Sidebar({
+  channels,
+  activeChannel,
+  onSelectChannel,
+  onPrefetchChannel,
+  onCreateChannel,
+}: {
+  channels: Channel[]
+  activeChannel: string
+  onSelectChannel: (channelId: string) => void
+  onPrefetchChannel: (channelId: string) => void
+  onCreateChannel: () => void
+}) {
   return (
     <div style={styles.sidebar}>
       <div style={styles.sidebarHeader}>
@@ -131,25 +322,32 @@ function Sidebar({ activeChannel }: { activeChannel: string }) {
       </div>
 
       <div style={styles.sectionLabel}>Channels</div>
-      {CHANNELS.map((ch) => (
+      {channels.map((channel) => (
         <div
-          key={ch}
+          key={channel.id}
           className={
             "sidebar-nav-item sidebar-nav-item--channel" +
-            (ch === activeChannel ? " sidebar-nav-item--active" : "")
+            (channel.id === activeChannel ? " sidebar-nav-item--active" : "")
           }
           style={styles.channelItem}
+          onMouseEnter={() => onPrefetchChannel(channel.id)}
+          onFocus={() => onPrefetchChannel(channel.id)}
+          onPointerDown={() => onPrefetchChannel(channel.id)}
+          onClick={() => onSelectChannel(channel.id)}
         >
-
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M12.6667 7.33334H3.33333C2.59695 7.33334 2 7.93029 2 8.66667V13.3333C2 14.0697 2.59695 14.6667 3.33333 14.6667H12.6667C13.403 14.6667 14 14.0697 14 13.3333V8.66667C14 7.93029 13.403 7.33334 12.6667 7.33334Z" stroke="#5C5C5C" stroke-linecap="round" stroke-linejoin="round" />
             <path d="M4.66666 7.33334V4.66667C4.66666 3.78261 5.01785 2.93477 5.64297 2.30965C6.2681 1.68453 7.11594 1.33334 8 1.33334C8.88405 1.33334 9.7319 1.68453 10.357 2.30965C10.9821 2.93477 11.3333 3.78261 11.3333 4.66667V7.33334" stroke="#5C5C5C" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
 
-          {ch}
+          {channel.name}
         </div>
       ))}
-      <div className="sidebar-nav-item sidebar-nav-item--channel" style={styles.channelItem}>
+      <div
+        className="sidebar-nav-item sidebar-nav-item--channel"
+        style={styles.channelItem}
+        onClick={onCreateChannel}
+      >
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M3.33334 8H12.6667M8 3.33333V12.6667" stroke="#5C5C5C" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
@@ -170,18 +368,29 @@ function Sidebar({ activeChannel }: { activeChannel: string }) {
 
 // ---------- main panel ----------
 
-function MainPanel({ db }: { db: MessagesDb }) {
-  const typingUsers = useTypingUsers(db.channelSync)
+function MainPanel({
+  messagesStore,
+  activeChannelId,
+}: {
+  messagesStore: MessagesStore
+  activeChannelId: string
+}) {
+  const typingUsers = useTypingUsers(messagesStore, activeChannelId)
+  const channelReady = useSyncExternalStore(
+    messagesStore.subscribeChannelReadiness,
+    () => messagesStore.isChannelReady(activeChannelId),
+    () => false
+  )
   const demoOffline = useSyncExternalStore(
-    db.subscribeDemoOffline,
-    db.isDemoOffline,
+    messagesStore.subscribeDemoOffline,
+    messagesStore.isDemoOffline,
     () => false
   )
 
   return (
     <div style={styles.main}>
       <div style={styles.mainHeader}>
-        <span style={styles.mainHeaderTitle}>{CHANNEL_ID}</span>
+        <span style={styles.mainHeaderTitle}>{activeChannelId}</span>
         <div style={styles.headerActions}>
           <button
             style={{
@@ -189,7 +398,7 @@ function MainPanel({ db }: { db: MessagesDb }) {
               ...(demoOffline ? styles.headerActionBtnActive : null),
             }}
             onClick={() => {
-              db.setDemoOffline(!demoOffline)
+              messagesStore.setDemoOffline(!demoOffline)
             }}
           >
             {demoOffline ? "Offline" : "Online"}
@@ -197,7 +406,7 @@ function MainPanel({ db }: { db: MessagesDb }) {
           <button
             style={styles.headerActionBtn}
             onClick={() => {
-              void db.resetLocalCache()
+              void messagesStore.resetLocalCache()
             }}
           >
             Clear local cache
@@ -205,12 +414,19 @@ function MainPanel({ db }: { db: MessagesDb }) {
         </div>
       </div>
       <MessageList
-        collection={db.collection}
-        updateMessage={db.updateMessage}
-        deleteMessage={db.deleteMessage}
+        collection={messagesStore.collection}
+        channelId={activeChannelId}
+        channelReady={channelReady}
+        updateMessage={messagesStore.updateMessage}
+        deleteMessage={messagesStore.deleteMessage}
       />
       <TypingIndicator typingUsers={typingUsers} />
-      <MessageInput onSend={db.sendMessage} channelSync={db.channelSync} />
+      <MessageInput
+        key={activeChannelId}
+        channelId={activeChannelId}
+        onSend={messagesStore.sendMessage}
+        setTyping={(active) => messagesStore.setTyping(activeChannelId, active)}
+      />
     </div>
   )
 }
@@ -219,23 +435,31 @@ function MainPanel({ db }: { db: MessagesDb }) {
 
 function MessageList({
   collection,
+  channelId,
+  channelReady,
   updateMessage,
   deleteMessage,
 }: {
   collection: Collection<Message, string>
+  channelId: string
+  channelReady: boolean
   updateMessage: (id: string, body: string) => Promise<void>
   deleteMessage: (id: string) => Promise<void>
 }) {
-  const { data: messages, isLoading } = useLiveQuery(
-    collection as Collection<Message, string> & NonSingleResult
+  const { data: messages = [] } = useLiveQuery(
+    (q) =>
+      q
+        .from({ messages: collection })
+        .where(({ messages }) => eq(messages.channelId, channelId)),
+    [collection, channelId]
   )
   const bottomRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages?.length])
+  useLayoutEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "auto" })
+  }, [channelId, messages?.length])
 
-  const orderedMessages = [...(messages ?? [])].sort((a, b) => {
+  const orderedMessages = [...messages].sort((a, b) => {
     const createdDiff = a.createdAt.localeCompare(b.createdAt)
     if (createdDiff !== 0) return createdDiff
     return a.id.localeCompare(b.id)
@@ -243,8 +467,10 @@ function MessageList({
 
   return (
     <div style={styles.messageList}>
-      {/* {isLoading && <div style={styles.emptyState}>Loading channel...</div>} */}
-      {!isLoading && orderedMessages.length === 0 && (
+      {!channelReady && orderedMessages.length === 0 && (
+        <div style={styles.emptyState}>Loading channel...</div>
+      )}
+      {channelReady && orderedMessages.length === 0 && (
         <div style={styles.emptyState}>No messages yet. Say something!</div>
       )}
       {/* spacer pushes messages to bottom when few */}
@@ -308,7 +534,8 @@ function MessageRow({
     hour12: true,
   })
 
-  const displayName = message.authorId.replace(/^user-/, "")
+  const profile = authorProfile(message.authorId)
+  const displayName = profile?.name ?? message.authorId.replace(/^user-/, "")
 
   return (
     <div style={styles.messageRow}>
@@ -318,7 +545,11 @@ function MessageRow({
           backgroundColor: avatarColor(message.authorId),
         }}
       >
-        {initials(message.authorId)}
+        {profile?.avatarUrl ? (
+          <img src={profile.avatarUrl} alt={displayName} style={styles.msgAvatarImg} />
+        ) : (
+          initials(message.authorId)
+        )}
       </div>
       <div style={styles.msgContent}>
         <div style={styles.msgMeta}>
@@ -378,14 +609,15 @@ function MessageRow({
 // ---------- message input ----------
 
 function MessageInput({
+  channelId,
   onSend,
-  channelSync,
+  setTyping,
 }: {
-  onSend: (body: string) => Promise<void>
-  channelSync: ChannelSync
+  channelId: string
+  onSend: (channelId: string, body: string) => Promise<void>
+  setTyping: (active: boolean) => void
 }) {
   const [body, setBody] = useState("")
-  const [pendingCount, setPendingCount] = useState(0)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
   const handleSend = async () => {
@@ -394,16 +626,13 @@ function MessageInput({
 
     setBody("")
     inputRef.current?.focus()
-    setPendingCount((count) => count + 1)
-    channelSync.setTyping(false)
+    setTyping(false)
 
     try {
-      await onSend(trimmed)
+      await onSend(channelId, trimmed)
     } catch (error) {
       setBody((current) => (current.trim() ? current : trimmed))
       throw error
-    } finally {
-      setPendingCount((count) => Math.max(0, count - 1))
     }
   }
 
@@ -419,7 +648,7 @@ function MessageInput({
           onChange={(e) => {
             const nextValue = e.target.value
             setBody(nextValue)
-            channelSync.setTyping(nextValue.trim().length > 0)
+            setTyping(nextValue.trim().length > 0)
           }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -427,7 +656,7 @@ function MessageInput({
               void handleSend()
             }
           }}
-          onBlur={() => channelSync.setTyping(false)}
+          onBlur={() => setTyping(false)}
         />
         <div style={styles.inputToolbar}>
           <button style={styles.plusBtn}>+</button>
@@ -462,10 +691,10 @@ function MessageInput({
   )
 }
 
-function useTypingUsers(channelSync: ChannelSync): string[] {
+function useTypingUsers(messagesStore: MessagesStore, channelId: string): string[] {
   return useSyncExternalStore(
-    (callback) => channelSync.subscribeTyping(callback),
-    () => channelSync.getTypingUsers(),
+    (callback) => messagesStore.subscribeTyping(channelId, callback),
+    () => messagesStore.getTypingUsers(channelId),
     () => []
   )
 }
@@ -674,7 +903,6 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#ffb0b0",
     backgroundColor: "#2a1111",
   },
-
   // -- messages --
   messageList: {
     flex: 1,
@@ -706,6 +934,13 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#fff",
     flexShrink: 0,
     marginTop: 2,
+    overflow: "hidden" as const,
+  },
+  msgAvatarImg: {
+    width: "100%",
+    height: "100%",
+    objectFit: "cover" as const,
+    display: "block",
   },
   msgContent: {
     flex: 1,

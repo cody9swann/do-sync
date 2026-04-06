@@ -1,5 +1,6 @@
 import { defineConfig } from "vite"
 import react from "@vitejs/plugin-react"
+import { tanstackStart } from "@tanstack/react-start/plugin/vite"
 import { copyFileSync, mkdirSync, existsSync } from "fs"
 import { resolve, dirname } from "path"
 import { createRequire } from "module"
@@ -34,7 +35,7 @@ function copyPersistenceAssets() {
 copyPersistenceAssets()
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [tanstackStart(), react()],
   worker: {
     format: "es",
   },

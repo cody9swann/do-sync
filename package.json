@@ -9,6 +9,8 @@
 		"dev": "vite dev --port 3000",
 		"build": "vite build",
 		"preview": "pnpm run build && vite preview",
+		"clear:demo": "node scripts/clear-demo.mjs",
+		"seed:demo": "node scripts/seed-demo.mjs",
 		"test": "vitest run",
 		"deploy": "pnpm run build && wrangler deploy",
 		"cf-typegen": "wrangler types"

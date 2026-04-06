@@ -20,12 +20,31 @@ export interface Message {
   updatedAt: string | null
 }
 
+export interface Channel {
+  id: string
+  workspaceId: string
+  name: string
+  createdAt: string
+}
+
+export function slugifyChannelName(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 48)
+}
+
 // ---------------------------------------------------------------------------
 // Client → Server
 // ---------------------------------------------------------------------------
 
 export type ClientMessage =
   | SubscribeMessage
+  | ChannelRegistrySubscribeMessage
   | MessageCreateMessage
   | MessageUpdateMessage
   | MessageDeleteMessage
@@ -38,6 +57,10 @@ export interface SubscribeMessage {
   type: "subscribe"
   channelId: string
   lastSeq?: number
+}
+
+export interface ChannelRegistrySubscribeMessage {
+  type: "channels.subscribe"
 }
 
 /** Create a new message. The client provides a tempId for optimistic insert
@@ -83,8 +106,10 @@ export interface TypingStopMessage {
 
 export type ServerMessage =
   | SnapshotMessage
+  | ChannelsSnapshotMessage
   | SnapshotEndMessage
   | AckMessage
+  | ChannelCreatedBroadcastMessage
   | MessageCreatedMessage
   | MessageUpdatedMessage
   | MessageDeletedMessage
@@ -97,6 +122,11 @@ export interface SnapshotMessage {
   type: "snapshot"
   seq: number
   messages: Message[]
+}
+
+export interface ChannelsSnapshotMessage {
+  type: "channels.snapshot"
+  channels: Channel[]
 }
 
 /** Signals the end of a snapshot or replay batch. The client is now caught up
@@ -122,6 +152,11 @@ export interface MessageCreatedMessage {
   tempId?: string
   seq: number
   message: Message
+}
+
+export interface ChannelCreatedBroadcastMessage {
+  type: "channel.created"
+  channel: Channel
 }
 
 export interface MessageUpdatedMessage {

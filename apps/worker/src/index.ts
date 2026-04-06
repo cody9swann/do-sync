@@ -1,10 +1,13 @@
 import { ChannelDO } from "./channel-do"
+import { ChannelRegistryDO } from "./channel-registry-do"
 
 // Re-export the Durable Object class so wrangler can find it.
 export { ChannelDO }
+export { ChannelRegistryDO }
 
 interface Env {
   CHANNEL_DO: DurableObjectNamespace
+  CHANNEL_REGISTRY_DO: DurableObjectNamespace
 }
 
 function withCors(request: Request, response: Response) {
@@ -32,6 +35,12 @@ export default {
       return withCors(request, new Response(null, { status: 204 }))
     }
 
+    if (url.pathname === "/ws/channels") {
+      const id = env.CHANNEL_REGISTRY_DO.idFromName("channels")
+      const stub = env.CHANNEL_REGISTRY_DO.get(id)
+      return stub.fetch(request)
+    }
+
     // Route: /ws/:channelId → upgrade to WebSocket and proxy to ChannelDO.
     // Each channel maps to exactly one Durable Object instance (by name).
     const match = url.pathname.match(/^\/ws\/([^/]+)$/)
@@ -47,6 +56,12 @@ export default {
       const channelId = apiMatch[1]
       const id = env.CHANNEL_DO.idFromName(channelId)
       const stub = env.CHANNEL_DO.get(id)
+      return withCors(request, await stub.fetch(request))
+    }
+
+    if (url.pathname === "/api/channels") {
+      const id = env.CHANNEL_REGISTRY_DO.idFromName("channels")
+      const stub = env.CHANNEL_REGISTRY_DO.get(id)
       return withCors(request, await stub.fetch(request))
     }
 
