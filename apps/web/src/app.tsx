@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react"
 import { eq, useLiveQuery } from "@tanstack/react-db"
-import type { Collection, NonSingleResult } from "@tanstack/react-db"
+import type { Collection } from "@tanstack/react-db"
 import "./sidebar.css"
 import {
   initChannelsDb,
@@ -28,11 +28,6 @@ const DM_AVATAR_CODY =
 const DM_AVATAR_GABBY =
   "https://media.licdn.com/dms/image/v2/C4D03AQHHb1I73h8eJg/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1636650896688?e=1776902400&v=beta&t=pVFiiR1w823T44S1pT3sQrQY0BhYSkVN150Kie2PO4o"
 
-const DM_USERS = [
-  { name: "Cody", avatarUrl: DM_AVATAR_CODY },
-  { name: "Gabby", avatarUrl: DM_AVATAR_GABBY },
-]
-
 const AUTHOR_PROFILES: Record<string, { name: string; avatarUrl?: string }> = {
   "user-maya": { name: "Maya", avatarUrl: "https://randomuser.me/api/portraits/women/44.jpg" },
   "user-theo": { name: "Theo", avatarUrl: "https://randomuser.me/api/portraits/men/32.jpg" },
@@ -42,13 +37,13 @@ const AUTHOR_PROFILES: Record<string, { name: string; avatarUrl?: string }> = {
   "user-sam": { name: "Sam", avatarUrl: "https://randomuser.me/api/portraits/men/52.jpg" },
 }
 
-function sortChannels(channels: Channel[]) {
-  return [...channels].sort((left, right) => {
-    const createdDiff = left.createdAt.localeCompare(right.createdAt)
-    if (createdDiff !== 0) return createdDiff
-    return left.id.localeCompare(right.id)
-  })
-}
+const DM_USERS = [
+  { name: "Cody", avatarUrl: DM_AVATAR_CODY },
+  { name: "Gabby", avatarUrl: DM_AVATAR_GABBY },
+  ...Object.values(AUTHOR_PROFILES).flatMap((p) =>
+    p.avatarUrl ? [{ name: p.name, avatarUrl: p.avatarUrl }] : []
+  ),
+]
 
 function isEditableTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false
@@ -71,8 +66,22 @@ function initials(id: string) {
   return id.replace(/^user-/, "").slice(0, 2).toUpperCase()
 }
 
+function isDmRowCurrentUser(displayName: string) {
+  const slug = AUTHOR_ID.replace(/^user-/i, "").toLowerCase()
+  return displayName.trim().toLowerCase() === slug
+}
+
 function authorProfile(authorId: string) {
-  return AUTHOR_PROFILES[authorId] ?? null
+  const fromMap = AUTHOR_PROFILES[authorId]
+  if (fromMap) return fromMap
+  const idLower = authorId.toLowerCase()
+  if (idLower === "user-cody") {
+    return { name: "Cody", avatarUrl: DM_AVATAR_CODY }
+  }
+  if (idLower === "user-gabby") {
+    return { name: "Gabby", avatarUrl: DM_AVATAR_GABBY }
+  }
+  return null
 }
 
 // ---------- root ----------
@@ -183,9 +192,14 @@ function ChannelAppBody({
   onNavigateChannel: (channelId: string) => void
 }) {
   const { data: channelRows = [] } = useLiveQuery(
-    channelsDb.collection as Collection<Channel, string> & NonSingleResult
+    (q) =>
+      q
+        .from({ channels: channelsDb.collection })
+        .orderBy(({ channels }) => channels.createdAt, "asc")
+        .orderBy(({ channels }) => channels.id, "asc"),
+    [channelsDb.collection]
   )
-  const channels = sortChannels([...(channelRows ?? [])])
+  const channels = channelRows ?? []
 
   useEffect(() => {
     if (channels.length === 0) return
@@ -264,10 +278,23 @@ function WorkspaceStrip() {
     <div style={styles.strip}>
       <div style={styles.stripLogo}>
         {/* <span style={{ fontSize: 18 }}>🏔️</span> */}
-        <svg width="39" height="38" viewBox="0 0 39 38" fill="none" xmlns="http://www.w3.org/2000/svg">
+        {/* <svg width="39" height="38" viewBox="0 0 39 38" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M27.8596 18.1563C27.7917 18.1563 27.7324 18.207 27.707 18.2744L27.3 19.6834C27.122 20.2908 27.1898 20.8476 27.4865 21.261C27.7578 21.6407 28.2156 21.86 28.7667 21.8853L30.988 22.0203C31.0559 22.0203 31.1152 22.0541 31.1491 22.1047C31.183 22.1553 31.1915 22.2312 31.1746 22.2903C31.1407 22.3915 31.0389 22.4675 30.9287 22.4759L28.6141 22.6109C27.3593 22.6699 26.0113 23.6739 25.5365 24.9056L25.367 25.3359C25.333 25.4203 25.3924 25.5046 25.4856 25.5046H33.4383C33.5315 25.5046 33.6163 25.4456 33.6417 25.3528C33.7774 24.8635 33.8537 24.3488 33.8537 23.8173C33.8537 20.6958 31.2933 18.1479 28.1478 18.1479C28.0546 18.1479 27.9528 18.1479 27.8596 18.1563Z" fill="#FBAD41" />
           <path d="M24.8243 24.8044C25.0024 24.197 24.9346 23.6402 24.6378 23.2268C24.3665 22.8471 23.9087 22.6278 23.3576 22.6024L12.9209 22.4675C12.853 22.4675 12.7937 22.4337 12.7598 22.3831C12.7259 22.3325 12.7174 22.265 12.7343 22.1975C12.7683 22.0962 12.87 22.0203 12.9802 22.0119L23.5102 21.8769C24.7565 21.8178 26.113 20.8139 26.5878 19.5821L27.1898 18.0214C27.2152 17.9539 27.2237 17.8864 27.2067 17.8189C26.5285 14.7648 23.79 12.4869 20.5174 12.4869C17.4991 12.4869 14.9387 14.4273 14.023 17.1186C13.4296 16.6799 12.675 16.4437 11.8611 16.5196C10.4113 16.6631 9.24978 17.8189 9.10565 19.2615C9.07174 19.6328 9.09717 19.9955 9.18196 20.333C6.81652 20.4005 4.92587 22.324 4.92587 24.6947C4.92587 24.9057 4.94283 25.1166 4.96826 25.3275C4.98522 25.4287 5.07 25.5046 5.17174 25.5046H24.4343C24.5446 25.5046 24.6463 25.4287 24.6802 25.319L24.8243 24.8044Z" fill="#F6821F" />
+        </svg> */}
+        <svg width="39" height="38" viewBox="0 0 39 38" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <g clip-path="url(#clip0_3897_177)">
+            <path d="M6 33L30.5 8.5L6 29.5M9.5 29.5C13 -2 55 5 16.5 26H20" fill="#F6821F" />
+            <path d="M6 33V29.5L10 26L9.5 29.5L6 33Z" fill="#FBAD41" />
+            <line x1="6" y1="32.5" x2="33" y2="32.5" stroke="#3C2514" />
+          </g>
+          <defs>
+            <clipPath id="clip0_3897_177">
+              <rect width="28" height="28" fill="white" transform="translate(6 5)" />
+            </clipPath>
+          </defs>
         </svg>
+
 
       </div>
       {WORKSPACE_ICONS.map((w, i) => (
@@ -315,9 +342,10 @@ function Sidebar({
     <div style={styles.sidebar}>
       <div style={styles.sidebarHeader}>
         <span style={styles.workspaceName}>{WORKSPACE_NAME}</span>
-        <span style={{ color: "#999", fontSize: 12 }}><svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M4 6L8 10L12 6" stroke="#5C5C5C" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
+        <span style={{ color: "#999", fontSize: 12 }}>
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 6L8 10L12 6" stroke="#5C5C5C" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
         </span>
       </div>
 
@@ -355,10 +383,13 @@ function Sidebar({
       </div>
 
       <div style={{ ...styles.sectionLabel, marginTop: 20 }}>Direct Messages</div>
-      {DM_USERS.map((u, i) => (
-        <div key={i} className="sidebar-nav-item sidebar-nav-item--muted" style={styles.dmItem}>
+      {DM_USERS.map((u) => (
+        <div key={u.name} className="sidebar-nav-item sidebar-nav-item--muted" style={styles.dmItem}>
           <img src={u.avatarUrl} alt="" style={styles.dmAvatarImg} width={20} height={20} />
-          {u.name}
+          <span style={styles.dmNameRow}>
+            {u.name}
+            {isDmRowCurrentUser(u.name) ? <span style={styles.dmYouLabel}>You</span> : null}
+          </span>
         </div>
       ))}
 
@@ -403,14 +434,14 @@ function MainPanel({
           >
             {demoOffline ? "Offline" : "Online"}
           </button>
-          <button
+          {/* <button
             style={styles.headerActionBtn}
             onClick={() => {
               void messagesStore.resetLocalCache()
             }}
           >
             Clear local cache
-          </button>
+          </button> */}
         </div>
       </div>
       <MessageList
@@ -450,7 +481,9 @@ function MessageList({
     (q) =>
       q
         .from({ messages: collection })
-        .where(({ messages }) => eq(messages.channelId, channelId)),
+        .where(({ messages }) => eq(messages.channelId, channelId))
+        .orderBy(({ messages }) => messages.createdAt, "asc")
+        .orderBy(({ messages }) => messages.id, "asc"),
     [collection, channelId]
   )
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -459,23 +492,17 @@ function MessageList({
     bottomRef.current?.scrollIntoView({ behavior: "auto" })
   }, [channelId, messages?.length])
 
-  const orderedMessages = [...messages].sort((a, b) => {
-    const createdDiff = a.createdAt.localeCompare(b.createdAt)
-    if (createdDiff !== 0) return createdDiff
-    return a.id.localeCompare(b.id)
-  })
-
   return (
     <div style={styles.messageList}>
-      {!channelReady && orderedMessages.length === 0 && (
+      {!channelReady && messages.length === 0 && (
         <div style={styles.emptyState}>Loading channel...</div>
       )}
-      {channelReady && orderedMessages.length === 0 && (
+      {channelReady && messages.length === 0 && (
         <div style={styles.emptyState}>No messages yet. Say something!</div>
       )}
       {/* spacer pushes messages to bottom when few */}
       <div style={{ flex: 1 }} />
-      {orderedMessages.map((message) => (
+      {messages.map((message) => (
         <MessageRow
           key={message.id}
           message={message}
@@ -841,6 +868,18 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 4,
     objectFit: "cover" as const,
     flexShrink: 0,
+  },
+  dmNameRow: {
+    display: "flex",
+    alignItems: "baseline",
+    gap: 6,
+    minWidth: 0,
+  },
+  dmYouLabel: {
+    fontSize: 12,
+    fontWeight: 500,
+    opacity: 0.5,
+    color: "#949ba4",
   },
   sidebarFooter: {
     marginTop: "auto",
