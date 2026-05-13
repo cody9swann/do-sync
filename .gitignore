@@ -1,5 +1,6 @@
 node_modules
 .DS_Store
+.vscode
 dist
 dist-ssr
 *.local
@@ -10,6 +11,7 @@ dist-ssr
 .output
 .vinxi
 __unconfig*
+worker-configuration.d.ts
 todos.json
 
 .dev.vars*

@@ -22,27 +22,19 @@ const WORKSPACE_ICONS = [
   { letter: "T", color: "#223A26", border: "none" },
 ]
 
-const DM_AVATAR_CODY =
-  "https://media.licdn.com/dms/image/v2/C4D03AQHpCAhTweDQIw/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1617472337831?e=1776902400&v=beta&t=-ABSMEHjHtNDEIGG4bx-Y3tzF9TF3XSP8WIYg5UfXxc"
-
-const DM_AVATAR_GABBY =
-  "https://media.licdn.com/dms/image/v2/C4D03AQHHb1I73h8eJg/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1636650896688?e=1776902400&v=beta&t=pVFiiR1w823T44S1pT3sQrQY0BhYSkVN150Kie2PO4o"
-
-const AUTHOR_PROFILES: Record<string, { name: string; avatarUrl?: string }> = {
-  "user-maya": { name: "Maya", avatarUrl: "https://randomuser.me/api/portraits/women/44.jpg" },
-  "user-theo": { name: "Theo", avatarUrl: "https://randomuser.me/api/portraits/men/32.jpg" },
-  "user-priya": { name: "Priya", avatarUrl: "https://randomuser.me/api/portraits/women/68.jpg" },
-  "user-jordan": { name: "Jordan", avatarUrl: "https://randomuser.me/api/portraits/men/75.jpg" },
-  "user-alex": { name: "Alex", avatarUrl: "https://randomuser.me/api/portraits/women/33.jpg" },
-  "user-sam": { name: "Sam", avatarUrl: "https://randomuser.me/api/portraits/men/52.jpg" },
+const AUTHOR_PROFILES: Record<string, { name: string }> = {
+  "user-maya": { name: "Maya" },
+  "user-theo": { name: "Theo" },
+  "user-priya": { name: "Priya" },
+  "user-jordan": { name: "Jordan" },
+  "user-alex": { name: "Alex" },
+  "user-sam": { name: "Sam" },
 }
 
 const DM_USERS = [
-  { name: "Cody", avatarUrl: DM_AVATAR_CODY },
-  { name: "Gabby", avatarUrl: DM_AVATAR_GABBY },
-  ...Object.values(AUTHOR_PROFILES).flatMap((p) =>
-    p.avatarUrl ? [{ name: p.name, avatarUrl: p.avatarUrl }] : []
-  ),
+  { name: "Cody" },
+  { name: "Gabby" },
+  ...Object.values(AUTHOR_PROFILES),
 ]
 
 function isEditableTarget(target: EventTarget | null) {
@@ -76,10 +68,10 @@ function authorProfile(authorId: string) {
   if (fromMap) return fromMap
   const idLower = authorId.toLowerCase()
   if (idLower === "user-cody") {
-    return { name: "Cody", avatarUrl: DM_AVATAR_CODY }
+    return { name: "Cody" }
   }
   if (idLower === "user-gabby") {
-    return { name: "Gabby", avatarUrl: DM_AVATAR_GABBY }
+    return { name: "Gabby" }
   }
   return null
 }
@@ -317,7 +309,7 @@ function WorkspaceStrip() {
       </div>
       {/* user avatar pinned to bottom */}
       <div style={styles.sidebarFooter}>
-        <div style={{ ...styles.userAvatar, backgroundImage: "url(https://avatars.githubusercontent.com/codyswann?v=4)" }}>{initials(AUTHOR_ID)}</div>
+        <div style={styles.userAvatar}>{initials(AUTHOR_ID)}</div>
       </div>
     </div>
   )
@@ -385,7 +377,9 @@ function Sidebar({
       <div style={{ ...styles.sectionLabel, marginTop: 20 }}>Direct Messages</div>
       {DM_USERS.map((u) => (
         <div key={u.name} className="sidebar-nav-item sidebar-nav-item--muted" style={styles.dmItem}>
-          <img src={u.avatarUrl} alt="" style={styles.dmAvatarImg} width={20} height={20} />
+          <span style={{ ...styles.dmAvatar, backgroundColor: avatarColor(`user-${u.name}`) }}>
+            {initials(`user-${u.name}`)}
+          </span>
           <span style={styles.dmNameRow}>
             {u.name}
             {isDmRowCurrentUser(u.name) ? <span style={styles.dmYouLabel}>You</span> : null}
@@ -572,11 +566,7 @@ function MessageRow({
           backgroundColor: avatarColor(message.authorId),
         }}
       >
-        {profile?.avatarUrl ? (
-          <img src={profile.avatarUrl} alt={displayName} style={styles.msgAvatarImg} />
-        ) : (
-          initials(message.authorId)
-        )}
+        {initials(message.authorId)}
       </div>
       <div style={styles.msgContent}>
         <div style={styles.msgMeta}>
@@ -862,12 +852,17 @@ const styles: Record<string, React.CSSProperties> = {
     margin: "0 12px",
     borderRadius: 4,
   },
-  dmAvatarImg: {
+  dmAvatar: {
     width: 20,
     height: 20,
     borderRadius: 4,
-    objectFit: "cover" as const,
+    alignItems: "center",
+    color: "#FFFFFF",
+    display: "inline-flex",
     flexShrink: 0,
+    fontSize: 10,
+    fontWeight: 700,
+    justifyContent: "center",
   },
   dmNameRow: {
     display: "flex",
@@ -974,12 +969,6 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
     marginTop: 2,
     overflow: "hidden" as const,
-  },
-  msgAvatarImg: {
-    width: "100%",
-    height: "100%",
-    objectFit: "cover" as const,
-    display: "block",
   },
   msgContent: {
     flex: 1,

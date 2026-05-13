@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "types": "wrangler types"
+    "types": "wrangler types",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250620.0",
