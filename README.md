@@ -2,6 +2,8 @@
 
 Realtime channel sync demo built with TanStack DB, browser SQLite, Cloudflare Durable Objects, and WebSockets.
 
+<img width="1580" height="886" alt="do-sync-poster" src="https://github.com/user-attachments/assets/59937c9a-e2e1-4148-babe-18c37b4fac25" />
+
 This repo is a focused proof of concept for local-first chat-style data flows:
 
 - Durable Objects own canonical channel and message state.
